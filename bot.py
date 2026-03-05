@@ -21,14 +21,20 @@ logger = logging.getLogger(__name__)
 
 # Хранилище для ожидающих подтверждения сообщений
 pending_messages = {}
+# Хранилище для забаненных пользователей
+banned_users = set()  # Множество ID забаненных пользователей
 
 def is_admin(user) -> bool:
     """Проверяет, является ли пользователь админом"""
-    if user.id == ADMIN_ID:  # Проверяем по ID (надёжнее)
+    if user.id == ADMIN_ID:
         return True
     if user.username and f"@{user.username}" == ADMIN_USERNAME:
         return True
     return False
+
+def is_banned(user_id: int) -> bool:
+    """Проверяет, забанен ли пользователь"""
+    return user_id in banned_users
 
 # ========== ФУНКЦИЯ ПОДПИСИ ==========
 def make_signature(message):
@@ -36,23 +42,20 @@ def make_signature(message):
     user = message.from_user
     full_name = user.full_name or user.first_name
 
-    # Если сообщение переслано из канала
     if message.forward_from_chat:
         chat = message.forward_from_chat
         source = f"@{chat.username}" if chat.username else chat.title
         sender_name = message.forward_from.first_name if message.forward_from else chat.title
         return f"👥 {sender_name} (источник: \"{source}\")"
 
-    # Если переслано от пользователя
     if message.forward_from:
         sender_name = message.forward_from.full_name or message.forward_from.first_name
         if message.forward_from.username:
             source = f"@{message.forward_from.username}"
             return f"👥 {sender_name} (источник: \"{source}\")"
         else:
-            return f"👤 {sender_name}"  # без источника
+            return f"👤 {sender_name}"
 
-    # Просто обычное сообщение
     return f"👤 {full_name}"
 
 # ========== ФУНКЦИЯ ПУБЛИКАЦИИ ==========
@@ -91,6 +94,16 @@ async def publish_to_channel(context, message_info):
                 caption=final_caption
             )
 
+        # ГИФКИ
+        elif original_message.animation:
+            caption = original_message.caption or ""
+            final_caption = f"{caption}\n\n{signature}" if caption else signature
+            await context.bot.send_animation(
+                chat_id=CHANNEL_ID,
+                animation=original_message.animation.file_id,
+                caption=final_caption
+            )
+
         # АУДИО
         elif original_message.audio:
             caption = original_message.caption or ""
@@ -101,26 +114,19 @@ async def publish_to_channel(context, message_info):
                 caption=final_caption
             )
 
-        # ГОЛОС
+        # ГОЛОСОВЫЕ
         elif original_message.voice:
             await context.bot.send_voice(
                 chat_id=CHANNEL_ID,
-                voice=original_message.voice.file_id
-            )
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=signature
+                voice=original_message.voice.file_id,
+                caption=signame
             )
 
-        # ВИДЕОСООБЩЕНИЕ (кружок)
+        # ВИДЕОКРУЖКИ (БЕЗ ПОДПИСИ)
         elif original_message.video_note:
             await context.bot.send_video_note(
                 chat_id=CHANNEL_ID,
                 video_note=original_message.video_note.file_id
-            )
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=signature
             )
 
         # Всё остальное
@@ -133,12 +139,170 @@ async def publish_to_channel(context, message_info):
     except Exception as e:
         logger.error(f"Ошибка при публикации: {e}")
 
+# ========== КОМАНДЫ ДЛЯ АДМИНА ==========
+
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Блокирует пользователя по username или ID"""
+    user = update.effective_user
+    
+    if not is_admin(user):
+        await update.message.reply_text("⛔ Только админ может использовать эту команду")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Использование: `/ban @username` или `/ban 123456789`\n"
+            "Пример: `/ban @spammer`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    target = context.args[0]
+    
+    try:
+        # Пытаемся получить информацию о пользователе
+        if target.startswith('@'):
+            username = target[1:]  # Убираем @
+            # Ищем пользователя в pending_messages
+            user_id = None
+            for msg in pending_messages.values():
+                if msg['user'].username and msg['user'].username.lower() == username.lower():
+                    user_id = msg['user'].id
+                    break
+            
+            if user_id:
+                banned_users.add(user_id)
+                await update.message.reply_text(f"✅ Пользователь {target} заблокирован")
+            else:
+                # Если не нашли в pending, просто баним по username (сохраняем в отдельный словарь)
+                banned_users.add(target)  # Временно, лучше хранить username отдельно
+                await update.message.reply_text(f"✅ Пользователь {target} заблокирован (по username)")
+        else:
+            # Баним по ID
+            try:
+                user_id = int(target)
+                banned_users.add(user_id)
+                await update.message.reply_text(f"✅ Пользователь с ID {user_id} заблокирован")
+            except ValueError:
+                await update.message.reply_text("❌ Неверный формат. Укажи @username или числовой ID")
+    
+    except Exception as e:
+        logger.error(f"Ошибка в ban: {e}")
+        await update.message.reply_text("❌ Ошибка при блокировке")
+
+async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Разблокирует пользователя"""
+    user = update.effective_user
+    
+    if not is_admin(user):
+        await update.message.reply_text("⛔ Только админ может использовать эту команду")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Использование: `/unban @username` или `/unban 123456789`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    target = context.args[0]
+    
+    try:
+        if target.startswith('@'):
+            # Удаляем из бана по username
+            if target in banned_users:
+                banned_users.remove(target)
+                await update.message.reply_text(f"✅ Пользователь {target} разблокирован")
+            else:
+                await update.message.reply_text(f"❌ Пользователь {target} не найден в списке забаненных")
+        else:
+            try:
+                user_id = int(target)
+                if user_id in banned_users:
+                    banned_users.remove(user_id)
+                    await update.message.reply_text(f"✅ Пользователь с ID {user_id} разблокирован")
+                else:
+                    await update.message.reply_text(f"❌ Пользователь с ID {user_id} не найден в списке забаненных")
+            except ValueError:
+                await update.message.reply_text("❌ Неверный формат")
+    
+    except Exception as e:
+        logger.error(f"Ошибка в unban: {e}")
+        await update.message.reply_text("❌ Ошибка при разблокировке")
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет сообщение всем пользователям, которые когда-либо писали боту"""
+    user = update.effective_user
+    
+    if not is_admin(user):
+        await update.message.reply_text("⛔ Только админ может использовать эту команду")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Использование: `/broadcast Текст сообщения для всех`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    broadcast_text = ' '.join(context.args)
+    
+    # Собираем уникальные ID пользователей из pending_messages
+    users_to_notify = set()
+    for msg_info in pending_messages.values():
+        users_to_notify.add(msg_info['user'].id)
+    
+    if not users_to_notify:
+        await update.message.reply_text("❌ Нет пользователей для рассылки")
+        return
+    
+    # Отправляем сообщение каждому пользователю
+    success_count = 0
+    fail_count = 0
+    
+    for user_id in users_to_notify:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"📢 **Сообщение от администратора:**\n\n{broadcast_text}",
+                parse_mode='Markdown'
+            )
+            success_count += 1
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+            fail_count += 1
+    
+    await update.message.reply_text(
+        f"✅ Рассылка завершена!\n"
+        f"📨 Отправлено: {success_count}\n"
+        f"❌ Не удалось: {fail_count}"
+    )
+
+# ========== КОМАНДЫ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ==========
+
+async def rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает правила канала"""
+    await update.message.reply_text(
+        "📋 **Правила канала:**\n\n"
+        "1. 18+ не кидать, а именно: Расчленнёнку, Свастику, большие жопы\n"
+        "2. Не спамьте\n"
+        "3. \n"
+        "4. \n\n"
+        "Нарушение правил может привести к блокировке.",
+        parse_mode='Markdown'
+    )
+
 # ========== ОБРАБОТЧИК СООБЩЕНИЙ ==========
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает сообщения от обычных пользователей"""
     try:
         message = update.effective_message
         user = update.effective_user
+        
+        # Проверяем, не забанен ли пользователь
+        if is_banned(user.id):
+            await message.reply_text("⛔ Вы заблокированы и не можете отправлять сообщения.")
+            return
         
         # Сохраняем информацию о сообщении
         message_id = message.message_id
@@ -149,7 +313,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             'message': message
         }
         
-        # Пересылаем или копируем сообщение админу (чтобы он видел реально содержимое)
+        # Копируем сообщение админу
         await context.bot.copy_message(
             chat_id=ADMIN_ID,
             from_chat_id=update.effective_chat.id,
@@ -211,7 +375,8 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Пользователю отправляем простое сообщение
         await message.reply_text(
             "✅ Твоё сообщение отправлено администратору на рассмотрение!\n"
-            "Если оно будет одобрено, оно появится в канале."
+            "Если оно будет одобрено, оно появится в канале.\n\n"
+            "📋 Используй /rules чтобы узнать правила канала."
         )
         
         logger.info(f"Сообщение от {user.id} отправлено админу на модерацию")
@@ -234,7 +399,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if message_id in pending_messages:
                 await publish_to_channel(context, pending_messages[message_id])
                 
-                # Уведомляем пользователя
                 await context.bot.send_message(
                     chat_id=pending_messages[message_id]['from_chat_id'],
                     text="✅ Твоё сообщение было одобрено и опубликовано в канале!"
@@ -245,7 +409,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
         elif data.startswith('reject_'):
             if message_id in pending_messages:
-                # Уведомляем пользователя
                 await context.bot.send_message(
                     chat_id=pending_messages[message_id]['from_chat_id'],
                     text="❌ Твоё сообщение не прошло модерацию."
@@ -267,12 +430,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"👋 Привет, админ!\n\n"
             f"📢 Канал: {CHANNEL_ID}\n"
-            f"📝 Ты будешь получать уведомления о новых сообщениях."
+            f"📝 Ты будешь получать уведомления о новых сообщениях.\n\n"
+            f"📋 Доступные команды:\n"
+            f"/ban @user - заблокировать пользователя\n"
+            f"/unban @user - разблокировать\n"
+            f"/broadcast текст - отправить сообщение всем"
         )
     else:
         await update.message.reply_text(
             f"👋 Привет, {user.first_name}!\n\n"
-            f"📝 Твои сообщения будут отправлены администратору на рассмотрение."
+            f"📝 Твои сообщения будут отправлены администратору на рассмотрение.\n"
+            f"Используй /rules чтобы узнать правила канала."
         )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -283,7 +451,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "📚 **Команды для админа:**\n"
             "/start - Начать работу\n"
-            "/help - Эта справка\n\n"
+            "/help - Эта справка\n"
+            "/ban @user - заблокировать пользователя\n"
+            "/unban @user - разблокировать\n"
+            "/broadcast текст - отправить сообщение всем\n\n"
             "📨 Ты получаешь уведомления о каждом сообщении\n"
             "и решаешь - публиковать или нет."
         )
@@ -292,14 +463,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📚 **Как пользоваться ботом:**\n"
             "1. Отправь любое сообщение\n"
             "2. Оно уйдет администратору на проверку\n"
-            "3. Если одобрят - появится в канале"
+            "3. Если одобрят - появится в канале\n\n"
+            "📋 Правила: /rules"
         )
 
 # ========== ЗАПУСК ==========
 def main():
     """Запуск бота"""
     print("=" * 60)
-    print("🤖 ЗАПУСК БОТА")
+    print("🤖 ЗАПУСК БОТА-ПРЕДЛОЖКИ")
     print("=" * 60)
     print(f"📢 Канал: {CHANNEL_ID}")
     print(f"👤 Админ: {ADMIN_USERNAME} (ID: {ADMIN_ID})")
@@ -307,16 +479,26 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
+    # Команды для админа
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("ban", ban_command))
+    application.add_handler(CommandHandler("unban", unban_command))
+    application.add_handler(CommandHandler("broadcast", broadcast_command))
+    
+    # Команды для пользователей
+    application.add_handler(CommandHandler("rules", rules_command))
+    
+    # Обработчик сообщений
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    print("✅ Бот готов!")
+    print("✅ Бот-предложка готов!")
     print("📨 Уведомления будут приходить только админу")
+    print(f"👥 Забаненных пользователей: {len(banned_users)}")
     print("=" * 60)
     
     application.run_polling()
 
 if __name__ == "__main__":
-    main()  # ← ТОЛЬКО ОДИН ОТСТУП (4 пробела) не нужно!
+    main()
