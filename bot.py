@@ -149,6 +149,13 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             'message': message
         }
         
+        # Пересылаем или копируем сообщение админу (чтобы он видел реально содержимое)
+        await context.bot.copy_message(
+            chat_id=ADMIN_ID,
+            from_chat_id=update.effective_chat.id,
+            message_id=message_id
+        )
+
         # Определяем тип сообщения для превью
         if message.text:
             content_preview = "📝 Текст"
@@ -188,25 +195,23 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             ]
         ]
         
-        # Отправляем уведомление ТОЛЬКО админу (по ID)
+        # Отправляем уведомление админу с кнопками
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text=(
-                f"📨 **Новое сообщение**\n\n"
-                f"👤 От: {sender_line}\n"
-                f"📎 Тип: {content_preview}\n"
-                f"🔍 Превью: {preview}\n"
-                f"📝 Подпись будет: {signature_example}\n\n"
-                f"Выбери действие:"
-            ),
+            text=(f"📨 **Новое сообщение**\n\n"
+                  f"👤 От: {sender_line}\n"
+                  f"📎 Тип: {content_preview}\n"
+                  f"🔍 Превью: {preview}\n"
+                  f"📝 Подпись будет: {signature_example}\n\n"
+                  f"Выбери действие:"),
             reply_markup=InlineKeyboardMarkup(admin_keyboard),
             parse_mode='Markdown'
         )
         
         # Пользователю отправляем простое сообщение
         await message.reply_text(
-            f"✅ Твоё сообщение отправлено администратору на рассмотрение!\n"
-            f"Если оно будет одобрено, оно появится в канале."
+            "✅ Твоё сообщение отправлено администратору на рассмотрение!\n"
+            "Если оно будет одобрено, оно появится в канале."
         )
         
         logger.info(f"Сообщение от {user.id} отправлено админу на модерацию")
@@ -314,4 +319,5 @@ def main():
     application.run_polling()
 
 if __name__ == "__main__":
+
     main()
