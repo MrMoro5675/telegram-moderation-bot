@@ -315,3 +315,63 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ========== ДОБАВЬ ЭТОТ КОД В КОНЕЦ ФАЙЛА bot.py ==========
+import asyncio
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+import os
+
+# Простой HTTP-сервер для ответа на проверки Render
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    # Подавляем логи этого сервера, чтобы не засорять консоль
+    def log_message(self, format, *args):
+        return
+
+def run_health_server():
+    """Запускает HTTP-сервер на порту, который требует Render."""
+    port = int(os.environ.get('PORT', 10000))
+    server_address = ('0.0.0.0', port)
+    httpd = HTTPServer(server_address, HealthCheckHandler)
+    print(f"✅ Сервер здоров'я запущен на порту {port}")
+    httpd.serve_forever()
+
+# Функция main у тебя уже есть, просто добавь в нее запуск сервера
+# Найди в своем коде функцию main() и замени её на эту:
+
+def main():
+    """Запуск бота и сервера здоровья."""
+    print("=" * 60)
+    print("🤖 ЗАПУСК БОТА")
+    print("=" * 60)
+    print(f"📢 Канал: {CHANNEL_ID}")
+    print(f"👤 Админ: {ADMIN_USERNAME} (ID: {ADMIN_ID})")
+    print("=" * 60)
+
+    # Запускаем HTTP-сервер в отдельном потоке (это новое!)
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    print("⏳ Сервер здоровья запущен...")
+
+    # Создаем и запускаем приложение бота
+    application = Application.builder().token(TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
+    application.add_handler(CallbackQueryHandler(button_callback))
+
+    print("✅ Бот готов!")
+    print("📨 Уведомления будут приходить только админу")
+    print("=" * 60)
+
+    # Запускаем бота (эта функция будет работать вечно)
+    application.run_polling()
+
+# Конец изменений
+# ===========================================================
