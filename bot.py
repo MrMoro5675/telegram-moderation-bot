@@ -231,6 +231,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
+async def rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает правила канала"""
+    await update.message.reply_text(
+        "📋 **Правила канала:**\n\n"
+        "1. 18+ контент запрещён (расчленёнка, порнография, жестокость)\n"
+        "2. Реклама запрещена (казино, наркотики, сомнительные сайты)\n"
+        "3. Политика не обсуждается\n"
+        "4. Спам и флуд запрещены\n\n"
+        "Нарушение правил = блокировка.",
+        parse_mode='Markdown'
+    )
 
 # ========== ЗАПУСК ==========
 def main():
@@ -252,6 +263,7 @@ def main():
     # Команды
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("rules", rules_command))  # 👈 ЭТУ СТРОКУ ТОЖЕ НУЖНО ДОБАВИТЬ!
 
     # Обработчики
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
@@ -262,4 +274,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
