@@ -2,7 +2,7 @@ import logging
 import time
 import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram.ext import Application, MessageHandler, CallbackQueryHandler, CommandHandler, ContextTypes, filters
 
 # Токен из переменных окружения (безопасно!)
 TOKEN = os.getenv("BOT_TOKEN", "8778902859:AAEoxPJHpNm4p-Gvdny1ct2-83mm2f9oxrA")
@@ -262,3 +262,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
