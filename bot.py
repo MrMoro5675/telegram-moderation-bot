@@ -31,60 +31,27 @@ def format_user_info(user, source=None):
         return f'👤 {name}'
 
 
+# ========== СЛОВАРЬ ОБРАБОТЧИКОВ ==========
+MEDIA_HANDLERS = {
+    'text': lambda bot, chat_id, msg, caption: bot.send_message(chat_id=chat_id, text=caption),
+    'photo': lambda bot, chat_id, msg, caption: bot.send_photo(chat_id=chat_id, photo=msg.photo[-1].file_id, caption=caption),
+    'video': lambda bot, chat_id, msg, caption: bot.send_video(chat_id=chat_id, video=msg.video.file_id, caption=caption),
+    'audio': lambda bot, chat_id, msg, caption: bot.send_audio(chat_id=chat_id, audio=msg.audio.file_id, caption=caption),
+    'voice': lambda bot, chat_id, msg, caption: bot.send_voice(chat_id=chat_id, voice=msg.voice.file_id, caption=caption),
+    'animation': lambda bot, chat_id, msg, caption: bot.send_animation(chat_id=chat_id, animation=msg.animation.file_id, caption=caption),
+}
+
+# ========== ПУБЛИКАЦИЯ В КАНАЛ ==========
 async def publish_to_channel(context, message_info):
     user = message_info["user"]
     source = message_info.get("source")
+    original_message = message_info["message"]
 
     signature = format_user_info(user, source)
 
-    original_message = message_info["message"]
-
     try:
-        if original_message.text:
-            final_text = f"{original_message.text}\n\n{signature}"
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=final_text
-            )
-
-        elif original_message.photo:
-            caption = original_message.caption or ""
-            final_caption = f"{caption}\n\n{signature}" if caption else signature
-            await context.bot.send_photo(
-                chat_id=CHANNEL_ID,
-                photo=original_message.photo[-1].file_id,
-                caption=final_caption
-            )
-
-        elif original_message.video:
-            caption = original_message.caption or ""
-            final_caption = f"{caption}\n\n{signature}" if caption else signature
-            await context.bot.send_video(
-                chat_id=CHANNEL_ID,
-                video=original_message.video.file_id,
-                caption=final_caption
-            )
-
-        elif original_message.audio:
-            caption = original_message.caption or ""
-            final_caption = f"{caption}\n\n{signature}" if caption else signature
-            await context.bot.send_audio(
-                chat_id=CHANNEL_ID,
-                audio=original_message.audio.file_id,
-                caption=final_caption
-            )
-
-        elif original_message.voice:
-            await context.bot.send_voice(
-                chat_id=CHANNEL_ID,
-                voice=original_message.voice.file_id
-            )
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=signature
-            )
-
-        elif original_message.video_note:
+        # ========== ОСОБЫЙ СЛУЧАЙ: ВИДЕОКРУЖКИ ==========
+        if original_message.video_note:
             await context.bot.send_video_note(
                 chat_id=CHANNEL_ID,
                 video_note=original_message.video_note.file_id
@@ -93,7 +60,38 @@ async def publish_to_channel(context, message_info):
                 chat_id=CHANNEL_ID,
                 text=signature
             )
+            return  # Выходим, чтобы не попасть в общий обработчик
 
+        # Определяем тип сообщения и caption для остальных типов
+        msg_type = None
+        caption = None
+        
+        if original_message.text:
+            msg_type = 'text'
+            caption = f"{original_message.text}\n\n{signature}"
+        elif original_message.photo:
+            msg_type = 'photo'
+            base_caption = original_message.caption or ""
+            caption = f"{base_caption}\n\n{signature}".strip()
+        elif original_message.video:
+            msg_type = 'video'
+            base_caption = original_message.caption or ""
+            caption = f"{base_caption}\n\n{signature}".strip()
+        elif original_message.audio:
+            msg_type = 'audio'
+            base_caption = original_message.caption or ""
+            caption = f"{base_caption}\n\n{signature}".strip()
+        elif original_message.voice:
+            msg_type = 'voice'
+            caption = signature
+        elif original_message.animation:
+            msg_type = 'animation'
+            base_caption = original_message.caption or ""
+            caption = f"{base_caption}\n\n{signature}".strip()
+
+        # Отправляем через словарь обработчиков
+        if msg_type and msg_type in MEDIA_HANDLERS:
+            await MEDIA_HANDLERS[msg_type](context.bot, CHANNEL_ID, original_message, caption)
         else:
             await context.bot.send_message(
                 chat_id=CHANNEL_ID,
@@ -104,6 +102,7 @@ async def publish_to_channel(context, message_info):
         logger.error(f"Ошибка публикации: {e}")
 
 
+# ========== ОБРАБОТЧИК ПРЕДЛОЖЕК ==========
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message:
@@ -175,6 +174,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("✅ Предложка отправлена!")
 
 
+# ========== ОБРАБОТЧИК КНОПОК ==========
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
@@ -207,6 +207,32 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Предложка уже не существует")
 
 
+# ========== КОМАНДЫ ==========
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет приветственное сообщение"""
+    user = update.effective_user
+    
+    await update.message.reply_text(
+        f"👋 Привет, {user.first_name}!\n\n"
+        f"📝 Я бот-предложка для канала @MrMoro_Lyalakaet\n\n"
+        f"📨 Отправь мне любое сообщение (текст, фото, видео, голосовое), "
+        f"и оно уйдёт админу на проверку.\n"
+        f"Если одобрят — появится в канале!"
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Помощь"""
+    await update.message.reply_text(
+        "📚 **Как пользоваться:**\n"
+        "1. Отправь любое сообщение\n"
+        "2. Оно уйдет администратору на проверку\n"
+        "3. Если одобрят — появится в канале\n\n"
+        "Поддерживаются: текст, фото, видео, аудио, голосовые, кружки",
+        parse_mode='Markdown'
+    )
+
+
+# ========== ЗАПУСК ==========
 def main():
     if not TOKEN:
         print("❌ ОШИБКА: BOT_TOKEN не найден!")
@@ -223,6 +249,11 @@ def main():
 
     app = Application.builder().token(TOKEN).build()
 
+    # Команды
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", help_command))
+
+    # Обработчики
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
     app.add_handler(CallbackQueryHandler(handle_buttons))
 
@@ -231,4 +262,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
